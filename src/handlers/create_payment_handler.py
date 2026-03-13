@@ -6,6 +6,7 @@ Auteurs : Gabriel C. Ullmann, Fabio Petrillo, 2025
 import requests
 from handlers.handler import Handler
 from order_saga_state import OrderSagaState
+import config
 
 class CreatePaymentHandler(Handler):
     """ Handle the creation of a payment transaction for a given order. Trigger rollback of previous steps in case of failure. """
@@ -20,25 +21,47 @@ class CreatePaymentHandler(Handler):
     def run(self):
         """Call payment microservice to generate payment transaction"""
         try:
-            # TODO: effectuer une requête à /orders pour obtenir le total_amount de la commande (que sera utilisé pour démander la transaction de paiement)
-            """
-            GET my-api-gateway-address/order/{id} ...
-            """
+            order_response = requests.get(
+                f"{config.API_GATEWAY_URL}/store-manager-api/orders/{self.order_id}",
+                headers={'Content-Type': 'application/json'}
+            )
 
-            # TODO: effectuer une requête à /payments pour créer une transaction de paiement
-            """
-            POST my-api-gateway-address/payments ...
-            json={ voir collection Postman pour en savoir plus ... }
-            """
-            response_ok = True
-            if response_ok:
+            if not order_response.ok:
+                self.logger.error(
+                    "Erreur lecture commande:",
+                    order_response.status_code,
+                    order_response.text
+                )
+                return self.rollback()
+
+            order_data = order_response.json()
+            self.total_amount = float(order_data["total_amount"])
+
+            payment_response = requests.post(
+                f"{config.API_GATEWAY_URL}/payments-api/payments",
+                json={
+                    "user_id": self.order_data["user_id"],
+                    "order_id": self.order_id,
+                    "total_amount": self.total_amount
+                },
+                headers={'Content-Type': 'application/json'}
+            )
+
+# payment_response.ok
+            if payment_response.ok: 
                 self.logger.debug("Transition d'état: CreatePayment -> PAYMENT_CREATED")
                 return OrderSagaState.PAYMENT_CREATED
             else:
+                self.logger.error(
+                    f"Erreur création paiement: {payment_response.status_code} {payment_response.text}"
+                )
+
                 return self.rollback()
 
-        except Exception:
+        except Exception as e:
+            self.logger.error(f"Exception création paiement: {e}")
             return self.rollback()
+
         
     def rollback(self):
         """ Call StoreManager to restore stock quantities if payment transaction creation fails """
